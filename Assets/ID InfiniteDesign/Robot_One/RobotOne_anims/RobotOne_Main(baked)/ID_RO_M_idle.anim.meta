@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 51338a444b042a54bbdb9b3c94f41918
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 7400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 269375
+  packageName: ID_Robot_One
+  packageVersion: 1.0
+  assetPath: Assets/ID InfiniteDesign/Robot_One/RobotOne_anims/RobotOne_Main(baked)/ID_RO_M_idle.anim
+  uploadId: 623899

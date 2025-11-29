@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 57ec73b8028908048991f89e8b914066
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 7400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 269375
+  packageName: ID_Robot_One
+  packageVersion: 1.0
+  assetPath: Assets/ID InfiniteDesign/Robot_One/RobotOne_anims/RobotOne_NoVfx/ID_RO_N_idle.anim
+  uploadId: 623899

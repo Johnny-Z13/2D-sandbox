@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 4685d428047d05f4b8262bfa9d47985c
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 9100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 269375
+  packageName: ID_Robot_One
+  packageVersion: 1.0
+  assetPath: Assets/ID InfiniteDesign/Robot_One/RobotOne_anims/RobotOne_Vfx/RobotOne_Vfx
+    anims.controller
+  uploadId: 623899

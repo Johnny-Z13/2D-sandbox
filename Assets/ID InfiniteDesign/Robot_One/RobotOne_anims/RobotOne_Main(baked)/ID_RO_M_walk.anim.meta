@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 64ddbd0116b7fe64fa489e9645e4d8e2
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 7400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 269375
+  packageName: ID_Robot_One
+  packageVersion: 1.0
+  assetPath: Assets/ID InfiniteDesign/Robot_One/RobotOne_anims/RobotOne_Main(baked)/ID_RO_M_walk.anim
+  uploadId: 623899

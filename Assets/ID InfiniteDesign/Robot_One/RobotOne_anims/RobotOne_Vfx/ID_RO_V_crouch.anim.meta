@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: bed80cccf8095ad4e806646eb1554bbc
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 7400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 269375
+  packageName: ID_Robot_One
+  packageVersion: 1.0
+  assetPath: Assets/ID InfiniteDesign/Robot_One/RobotOne_anims/RobotOne_Vfx/ID_RO_V_crouch.anim
+  uploadId: 623899

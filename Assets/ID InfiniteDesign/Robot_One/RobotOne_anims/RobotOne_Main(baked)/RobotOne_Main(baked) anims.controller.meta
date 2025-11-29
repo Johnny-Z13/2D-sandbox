@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 24dc70a0626e37b4496ab4eb413e7a4b
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 9100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 269375
+  packageName: ID_Robot_One
+  packageVersion: 1.0
+  assetPath: Assets/ID InfiniteDesign/Robot_One/RobotOne_anims/RobotOne_Main(baked)/RobotOne_Main(baked)
+    anims.controller
+  uploadId: 623899

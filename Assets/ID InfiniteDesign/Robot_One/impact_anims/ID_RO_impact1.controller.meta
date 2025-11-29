@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: c569380197629fc4b99067b0334835be
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 9100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 269375
+  packageName: ID_Robot_One
+  packageVersion: 1.0
+  assetPath: Assets/ID InfiniteDesign/Robot_One/impact_anims/ID_RO_impact1.controller
+  uploadId: 623899

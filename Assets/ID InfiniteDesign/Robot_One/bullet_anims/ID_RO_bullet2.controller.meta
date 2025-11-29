@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 361681b5f9b5cc8459647543703342a4
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 9100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 269375
+  packageName: ID_Robot_One
+  packageVersion: 1.0
+  assetPath: Assets/ID InfiniteDesign/Robot_One/bullet_anims/ID_RO_bullet2.controller
+  uploadId: 623899

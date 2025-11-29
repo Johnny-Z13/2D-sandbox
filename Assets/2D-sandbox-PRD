@@ -1,0 +1,659 @@
+
+# Noita-Style 2D Pixel Sandbox – Unity URP – Master Design / Tech Spec
+
+## 0. Overview
+
+We’re building a **2D platformer sandbox** in Unity (URP) where:
+
+* The **entire world is made of tiny pixels/particles** (Noita-like resolution).
+* The world is fully **destructible, diggable, and simulated** as a pixel grid on the **GPU**.
+* The player moves and collides against this pixel world using **GPU-driven collision sampling**, not tile colliders.
+* Levels are **procedurally generated caverns** using **seeds** (reproducible worlds).
+
+This document defines the **core architecture, data model, behaviours, and implementation plan** for a first playable prototype.
+
+---
+
+## 1. Goals & Non-Goals
+
+### 1.1 Goals (V0–V1 prototype)
+
+* Noita-style **high resolution pixel world** (small particle size, fine detail).
+* **GPU-based simulation** of world materials using **compute shaders**:
+
+  * Start with: `Empty`, `Rock`, `Sand`, `Dirt`, `Water`.
+* **Procedural cavern generation** from a seed.
+* **Real-time destruction** (digging/explosions) that modifies the pixel world.
+* **Smooth 2D character movement** on top of this world using a **custom collision system** that samples the pixel grid.
+* Run at **high FPS** (target 120fps unlocked, 60+ stable) on a typical gaming PC.
+
+### 1.2 Non-Goals (for later versions)
+
+* Huge infinite worlds / chunk streaming (we plan for it, don’t build it yet).
+* Complex chemistry (burning, gases, pressure, etc. – keep space in design though).
+* Full platformer content (enemies, narrative, items – not in V0 spec).
+
+---
+
+## 2. Target Platform & Tech Stack
+
+* **Engine**: Unity (URP – 2D setup, latest 6000.x series or equivalent).
+* **Render pipeline**: URP (Universal Render Pipeline).
+* **Rendering style**:
+
+  * 2D orthographic camera.
+  * World rendered via a **fullscreen quad** using a custom URP-compatible material.
+* **Simulation**:
+
+  * GPU-based pixel sim using **compute shaders**.
+  * Ping-pong **RenderTexture** pair for world state.
+* **Collision**:
+
+  * Custom CPU collision that samples a **coarse collision grid** derived from the GPU world via `AsyncGPUReadback`.
+
+---
+
+## 3. High-Level System Architecture
+
+### 3.1 Core Systems
+
+1. **PixelWorldManager** (MonoBehaviour)
+
+   * Owns the world textures (ping-pong RenderTextures).
+   * Dispatches compute shaders each frame.
+   * Handles procedural generation (calls init kernel / CPU gen).
+   * Provides API: world-space ↔ pixel-space, dig/explode calls, collision queries (via a separate collision grid module).
+
+2. **PixelSim Compute Shader(s)**
+
+   * Kernel `CSInit`: initializes world with seeded caverns.
+   * Kernel `CSMain`: updates world each frame (material behaviour rules).
+   * Optionally: additional kernels (e.g., explosion application, debug).
+
+3. **PixelWorldRenderer**
+
+   * Simple renderer, likely just a **Quad with MeshRenderer**:
+
+     * Material maps material IDs → colors/tiles.
+   * URP-compatible shader (HLSL or Shader Graph + custom function).
+
+4. **PixelCollisionSystem**
+
+   * Maintains a **downsampled collision grid** (CPU-side).
+   * Uses `AsyncGPUReadback` from active world texture at intervals.
+   * Maps world-space positions → collision grid.
+   * Provides methods:
+
+     * `bool IsSolidAtWorldPos(Vector2 pos)`
+     * `bool CastProbe(Vector2 start, Vector2 dir, float distance, out HitInfo hit)` (optional)
+   * Player controller uses this instead of normal colliders for ground, wall, and head checks.
+
+5. **PlayerController2D**
+
+   * 2D character movement, using **custom collision sampling**.
+   * Input: left/right, jump.
+   * Uses `PixelCollisionSystem` to:
+
+     * Detect ground.
+     * Resolve penetration by stepping back out of solid cells.
+
+6. **DestructionSystem**
+
+   * Bridges gameplay actions (explosions, digging) to GPU:
+
+     * Maintains a per-frame list of “edit commands” (explosions, dig circles).
+     * Sends them as a `StructuredBuffer` to the compute shader.
+   * Compute shader applies edits by turning pixels to `Empty` (or other material).
+
+---
+
+## 4. World Representation
+
+### 4.1 World Space & Resolution
+
+* **Grid size (prototype)**:
+
+  * Width: `1024` pixels
+  * Height: `512` pixels
+    (configurable via inspector.)
+
+* **Cell size in world units**:
+
+  * `cellSize = 0.02f` world units per pixel (50 pixels per world unit).
+  * This gives a world size of roughly:
+
+    * `worldWidth = width * cellSize = 20.48 units`
+    * `worldHeight = height * cellSize = 10.24 units`
+
+* **World origin**:
+
+  * World pixel `(0,0)` (bottom-left) mapped to world-space:
+
+    * `origin = new Vector2(-worldWidth / 2, -worldHeight / 2)`
+      (centered around (0,0).)
+
+### 4.2 Material / Cell Data
+
+* Use **RenderTextureFormat.RInt** or suitable `uint`-compatible format.
+* Each pixel stores a **Material ID** as `uint`.
+
+#### Material Types (V0/V1)
+
+```csharp
+public enum MaterialType : uint
+{
+    Empty = 0,
+    Rock  = 1,
+    Dirt  = 2,
+    Sand  = 3,
+    Water = 4,
+    // Reserve IDs for future:
+    Lava  = 5,
+    Oil   = 6,
+    Gas   = 7
+}
+```
+
+We only need `Empty`, `Rock`, `Sand`, `Water` for V0/V1, but keep ID space open.
+
+---
+
+## 5. Procedural Cavern Generation
+
+### 5.1 Seed System
+
+* `int seed` exposed in `PixelWorldManager` inspector.
+* All world generation is deterministic given this seed.
+* Seed affects:
+
+  * Noise offsets.
+  * Random decisions in cave post-processing.
+
+### 5.2 Generation Pipeline
+
+**Option A – GPU init kernel (preferred)**
+
+1. `CSInit` kernel:
+
+   * For each pixel `(x,y)`:
+
+     * Compute noise-based value `n` using:
+
+       * Perlin-like custom noise or hash-based pseudo-noise.
+     * Threshold `n` to choose Rock vs Empty.
+
+2. Post-process:
+
+   * Optionally run simple **cellular automata**-like smoothing inside compute shader:
+
+     * Count solid neighbors.
+     * If neighbors > N → Rock, else Empty.
+     * Can be done in a few passes; for V0 can be skipped if noise looks OK.
+
+**Parameters (tweakable via inspector):**
+
+* `float caveScale = 0.05f;`
+* `float caveThreshold = 0.45f;`
+* `int smoothIterations = 3;` (optional)
+
+**Non-functional requirement:**
+
+* Must be fast enough to generate the full world on scene start without stutter.
+
+### 5.3 Biomes / Templates (Future)
+
+* Not required for V0, but design should allow stamping of “patterns”:
+
+  * e.g., pre-drawn rooms, shrines, structures.
+* These can be implemented later as an extra pass writing specific shapes into the world texture.
+
+---
+
+## 6. GPU Simulation (PixelSim)
+
+### 6.1 Ping-Pong Buffers
+
+* Two RenderTextures: `worldA` and `worldB`.
+
+  * Both size `width x height`, `RInt`, random write enabled, point sampling, clamp wrap.
+* Every simulation step:
+
+  * `WorldIn = (useAAsSource ? worldA : worldB)`
+  * `WorldOut = (useAAsSource ? worldB : worldA)`
+  * After dispatch, flip `useAAsSource`.
+  * Renderer uses the **latest** `WorldOut`.
+
+### 6.2 Compute Shader Kernels
+
+* `CSInit`
+
+  * Input: `_Width`, `_Height`, `_Seed`.
+  * Output: `WorldOut` initial materials (caves).
+
+* `CSMain`
+
+  * Input:
+
+    * `_Width`, `_Height`, `_DeltaTime`, `_Seed`,
+    * `WorldIn`, `WorldOut`,
+    * `Explosions` buffer (if any), explosion count.
+  * For each pixel:
+
+    * Apply explosion edits first (set to Empty if within explosion radius).
+    * Apply material behaviour for current material.
+
+### 6.3 Thread Group Size
+
+* Use `[numthreads(8,8,1)]` or `[16,16,1]`.
+* Dispatch:
+
+  * `groupX = ceil(width / 8)`
+  * `groupY = ceil(height / 8)`
+
+### 6.4 Update Order & Stability
+
+* For falling behaviour (sand/water), **update bottom-up** to avoid artifacts:
+
+  * Two strategies:
+
+    * **Single kernel** over full grid with careful rules using `WorldIn` (pure read) and writing to `WorldOut` (single-pass).
+    * Or split into multiple passes (e.g., odd/even rows) for more stable movement.
+
+* For V0, we accept minor artefacts and use a simple approach:
+
+  * Read from `WorldIn`, write to `WorldOut`.
+  * No read-after-write from `WorldOut` in the same frame.
+
+---
+
+## 7. Material Behaviour Specs (V0/V1)
+
+Define behaviours in `CSMain`.
+
+### 7.1 Empty
+
+* ID: `0`
+* Behaviour: No-op; remains Empty unless modified by explosion or incoming material swap.
+
+### 7.2 Rock
+
+* ID: `1`
+* Behaviour: Static; does not move.
+* Used as main solid terrain.
+
+### 7.3 Sand
+
+* ID: `3`
+
+* Pseudo-rules:
+
+  * Try cell below `(x, y-1)`:
+
+    * If `Empty`, move there.
+  * Else:
+
+    * Randomly choose left or right diagonal:
+
+      * If `(x+dir, y-1)` is `Empty`, move there.
+  * Else:
+
+    * Stay in place.
+
+* Implementation detail:
+
+  * Material move = set `WorldOut[newPos] = Sand`, and `WorldOut[currPos] = Empty`.
+  * If blocked and no movement, `WorldOut[currPos] = Sand`.
+
+### 7.4 Water
+
+* ID: `4`
+
+* Pseudo-rules:
+
+  * Try cell below:
+
+    * If `Empty`, move down.
+  * Else:
+
+    * Randomly choose left or right:
+
+      * If horizontal neighbour `(x+dir, y)` is `Empty`, move there.
+  * Else:
+
+    * Stay.
+
+* Optional improvement:
+
+  * Slight random jitter (swap with same-material neighbours) to avoid clumping.
+
+---
+
+## 8. Rendering (URP)
+
+### 8.1 World Mesh & Material
+
+* Create a quad mesh that spans the world size:
+
+  * Position:
+
+    * Centered at (0,0,0).
+    * Scale: `worldWidth x worldHeight`.
+
+* Attach MeshRenderer + MeshFilter to a `PixelWorldRenderer` GameObject.
+
+* Assign a URP-compatible **unlit material**:
+
+  * Shader takes:
+
+    * `_WorldTex` (the `RenderTexture` with material IDs).
+    * `_MaterialLUT` (small texture or array mapping IDs → colors).
+  * Shader reads the ID, maps to a color.
+
+### 8.2 Shader Mapping
+
+Two options:
+
+1. **1D LUT texture**:
+
+   * Create a small 1D texture with N pixels, each pixel color = material color.
+   * Sample `_WorldTex` at UV, get ID.
+   * Use ID / N to sample LUT.
+
+2. **Hard-coded palette**:
+
+   * Use `if/else` or `switch` on ID to assign color (fine for prototype with few materials).
+
+Preference for V0: **hard-coded palette** for simplicity.
+
+### 8.3 Camera Setup
+
+* 2D orthographic camera:
+
+  * Orthographic size set so that:
+
+    * Entire world width/height visible OR
+    * Slightly zoomed in.
+* Ensure pixel-perfect look:
+
+  * Set camera to **orthographic**.
+  * Set filtering on `_WorldTex` to **point**, no filtering or mipmaps.
+
+---
+
+## 9. Collision System (GPU-Driven)
+
+### 9.1 Coarse Collision Grid
+
+* Downsample factor: e.g. `collisionCellSizePixels = 4` (4x4 pixels per collision cell).
+
+* Collision grid size:
+
+  * `collWidth = width / 4`
+  * `collHeight = height / 4`
+
+* Each collision cell stores:
+
+  * `bool isSolid`.
+  * Optional: `float solidity` or material type for later.
+
+### 9.2 Update Frequency
+
+* Do **not** update collision grid every frame to save bandwidth.
+* Update at fixed interval, e.g. every `0.1–0.2` seconds, or after a significant explosion.
+* Use **AsyncGPUReadback** from the active world texture.
+
+### 9.3 Collision Grid Build Process
+
+1. Use `AsyncGPUReadback.Request` on `RenderTexture` containing material IDs.
+2. On completion callback:
+
+   * Access the raw `uint` data.
+   * For each collision cell `(cx, cy)`:
+
+     * Inspect its underlying `4x4` pixels.
+     * If any pixel is `Rock` or `Dirt` (or other solid types), mark `isSolid = true`.
+3. Store in a 2D array `bool[,] collisionGrid`.
+
+### 9.4 API for Gameplay
+
+Implement in `PixelCollisionSystem`:
+
+* `bool IsSolidAtWorldPos(Vector2 pos)`
+
+  * Convert world pos → pixel → collision grid indices.
+  * Return `false` if out of bounds.
+  * Inside: return `collisionGrid[cx, cy]`.
+
+Optional / future:
+
+* `Vector2 SolveCollision(Vector2 desiredPosition, Vector2 velocity)`
+
+  * Move along velocity, stepping and checking solidity, stop before entering solid cells.
+
+---
+
+## 10. Player Controller Design
+
+### 10.1 Movement Model
+
+* 2D platformer character:
+
+  * Horizontal movement with acceleration.
+  * Jump with coyote time (optional).
+  * Gravity applied each frame.
+
+### 10.2 Collision Handling
+
+* No Rigidbody2D / Collider2D or Tilemap colliders for ground.
+* Instead:
+
+1. Integrate velocity to propose `newPosition`.
+
+2. Use `PixelCollisionSystem.IsSolidAtWorldPos` at:
+
+   * Feet.
+   * Head.
+   * Left/right sides.
+
+3. Resolve:
+
+   * If moving down and feet probes hit solid, snap onto surface.
+   * If moving up and head probes hit, zero vertical velocity.
+   * If moving sideways into solid, stop horizontal movement.
+
+### 10.3 Player ↔ World Interaction
+
+* The player may have tools/weapons that:
+
+  * Call `DestructionSystem.AddExplosion(worldPos, radius, type)` (for digging/explosions).
+* For V0:
+
+  * Simple left-click “dig” tool at mouse position (if in range):
+
+    * Creates an explosion that turns material to `Empty`.
+
+---
+
+## 11. Destruction & Editing Pipeline
+
+### 11.1 Explosion / Dig Command Structure
+
+On CPU:
+
+```csharp
+struct ExplosionCommand
+{
+    public Vector2 center;
+    public float radius;
+    public uint targetMaterial; // maybe unused for V0; mostly set to Empty
+}
+```
+
+* Maintain a `List<ExplosionCommand>` in `DestructionSystem`.
+* Each frame before sim:
+
+  * Upload list to a `ComputeBuffer` / `StructuredBuffer<Explosion>` on the compute shader.
+  * Set `_ExplosionCount`.
+
+### 11.2 Applying Explosions in Compute Shader
+
+In `CSMain`:
+
+* For each pixel `(x,y)`:
+
+  * Compute its world position from `_WorldOrigin`, `_CellSize`.
+  * Loop through explosions:
+
+    * If distance² <= radius²:
+
+      * Set `mat = Empty` and skip normal behaviour logic.
+* After processed, write result to `WorldOut`.
+
+### 11.3 Clear Commands
+
+* After dispatching `CSMain`, clear the CPU list of explosions.
+
+---
+
+## 12. Performance & Quality Targets
+
+### 12.1 Performance Targets
+
+* World size: up to `1024 x 512` pixels in V0.
+* Target:
+
+  * 60+ FPS, ideally 120+ on typical gaming hardware.
+* Memory:
+
+  * Keep VRAM usage minimal (few RenderTextures, no large textures beyond world).
+
+### 12.2 Optimisation Guidelines (for implementation)
+
+* Use **single-pass** compute simulation per frame for materials (no extra passes unless needed).
+* Avoid CPU-GPU sync:
+
+  * Only use `AsyncGPUReadback`, never `ReadPixels` or blocking readbacks.
+* Only refresh collision grid on timer or when necessary.
+* Use `RenderTexture` with:
+
+  * `enableRandomWrite = true`
+  * `filterMode = Point`
+  * `wrapMode = Clamp`
+  * No mipmaps.
+
+---
+
+## 13. Future Extensions (Design Hooks)
+
+Not required now, but system should be extensible:
+
+* Additional materials:
+
+  * Lava: flows like water, converts `Sand`/`Dirt` to `Rock`, damages player.
+  * Oil: flammable liquid with lower density.
+  * Gas: moves upward, diffuses.
+* Temperature / pressure fields:
+
+  * Additional textures on GPU for temp/pressure.
+* Multiple world chunks:
+
+  * Each chunk has its own `PixelWorldManager`.
+  * Stream in/out based on player location.
+
+---
+
+## 14. Unity Project & Folder Structure (Suggestion)
+
+A minimal structure Cursor should follow:
+
+```text
+Assets/
+  Scripts/
+    PixelWorld/
+      PixelWorldManager.cs
+      PixelCollisionSystem.cs
+      DestructionSystem.cs
+      PlayerController2D.cs
+      Input/
+        PlayerInputHandler.cs (optional)
+  Shaders/
+    Compute/
+      PixelWorld.compute
+    Materials/
+      PixelWorldRender.shader (or Shader Graph)
+  Prefabs/
+    PixelWorld.prefab
+    Player.prefab
+  Scenes/
+    Main.unity
+```
+
+---
+
+## 15. Implementation Plan (for Cursor / AI Coding Agent)
+
+**Phase 1 – Skeleton**
+
+1. Create URP 2D project.
+2. Implement `PixelWorldManager`:
+
+   * Create ping-pong RenderTextures.
+   * Hook up `PixelWorld.compute` with `CSInit` and `CSMain` kernels.
+   * Inspector params: width, height, seed, cellSize.
+3. Implement `PixelWorld.compute` with:
+
+   * `CSInit`: fill with simple rock/empty pattern or noise.
+   * `CSMain`: no behaviour yet, just copy `WorldIn` → `WorldOut`.
+
+**Phase 2 – Rendering**
+
+4. Create `PixelWorldRender.shader`:
+
+   * Sample `_WorldTex` (RInt/uint).
+   * Map IDs to colors (hard-coded palette).
+5. Create quad + material, assign `_WorldTex` from `PixelWorldManager`.
+
+**Phase 3 – Cavern Generation**
+
+6. In `CSInit`, implement seeded noise-based caverns.
+7. Expose scale/threshold in `PixelWorldManager`, pass as shader uniforms.
+
+**Phase 4 – Material Behaviours**
+
+8. Implement `MaterialType` enum in C# and corresponding constants in compute shader.
+9. Implement Sand behaviour in `CSMain` (fall & slide).
+10. Implement Water behaviour (basic downward + sideways flow).
+
+**Phase 5 – Destruction / Digging**
+
+11. Implement `DestructionSystem`:
+
+    * List of explosion commands.
+    * `AddExplosion(worldPos, radius)` method.
+    * Upload to compute via `ComputeBuffer`.
+12. In `CSMain`, apply explosions before material behaviour.
+13. Add simple input: left-click to dig at mouse world position.
+
+**Phase 6 – Collision**
+
+14. Implement `PixelCollisionSystem`:
+
+    * Setup collision grid at `width/4 x height/4`.
+    * Use `AsyncGPUReadback` on active world RT at interval.
+    * Build collision grid (solid if any rock/dirt in 4x4 pixel block).
+15. Implement `IsSolidAtWorldPos`.
+16. Implement basic `PlayerController2D` using:
+
+    * Gravity, velocity integration.
+    * Ground/side checks via `IsSolidAtWorldPos`.
+
+**Phase 7 – Polish & Parameters**
+
+17. Expose tweakable parameters in inspector:
+
+    * Cave scale, threshold.
+    * Sand & water behaviour toggles.
+    * Collision refresh interval.
+18. Ensure everything is well-commented and modular for future expansion.
+
+---

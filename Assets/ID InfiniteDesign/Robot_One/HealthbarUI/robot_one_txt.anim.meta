@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 5d07c2bc6ce62f544835656294bdfe3b
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 7400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 269375
+  packageName: ID_Robot_One
+  packageVersion: 1.0
+  assetPath: Assets/ID InfiniteDesign/Robot_One/HealthbarUI/robot_one_txt.anim
+  uploadId: 623899
