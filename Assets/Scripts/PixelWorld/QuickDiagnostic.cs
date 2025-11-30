@@ -14,8 +14,8 @@ namespace PixelWorld
 
         private void Start()
         {
-            worldManager = FindObjectOfType<PixelWorldManager>();
-            collisionSystem = FindObjectOfType<PixelCollisionSystem>();
+            worldManager = Object.FindFirstObjectByType<PixelWorldManager>();
+            collisionSystem = Object.FindFirstObjectByType<PixelCollisionSystem>();
             mainCam = Camera.main;
             
             Debug.Log("<b>=== QUICK DIAGNOSTIC START ===</b>");
@@ -31,7 +31,7 @@ namespace PixelWorld
             }
             
             // Check player
-            var players = FindObjectsOfType<PlayerController2D>();
+            var players = Object.FindObjectsByType<PlayerController2D>(FindObjectsSortMode.None);
             Debug.Log($"PlayerController2D instances: {players.Length}");
             foreach (var p in players)
             {
@@ -90,7 +90,7 @@ namespace PixelWorld
             }
             
             // Test collision at player position
-            var player = FindObjectOfType<PlayerController2D>();
+            var player = Object.FindFirstObjectByType<PlayerController2D>();
             if (player != null && collisionSystem != null && collisionSystem.HasData)
             {
                 Vector2 playerPos = player.transform.position;
@@ -171,7 +171,7 @@ namespace PixelWorld
                 status += "Collision: <color=red>❌ Missing</color>\n";
             }
             
-            var player = FindObjectOfType<PlayerController2D>();
+            var player = Object.FindFirstObjectByType<PlayerController2D>();
             if (player != null)
             {
                 status += $"Player Y: {player.transform.position.y:F2}\n";

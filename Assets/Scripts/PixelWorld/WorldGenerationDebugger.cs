@@ -17,7 +17,7 @@ namespace PixelWorld
         private void Start()
         {
             if (worldManager == null)
-                worldManager = FindObjectOfType<PixelWorldManager>();
+                worldManager = Object.FindFirstObjectByType<PixelWorldManager>();
                 
             if (pixelShader == null && worldManager != null)
             {
@@ -133,6 +133,12 @@ namespace PixelWorld
             // Note: These are private in PixelWorldManager, so we can't access them directly
             // This is just a placeholder - in real use, make those fields public or add getters
             Debug.Log("Check PixelWorldManager Inspector for current parameter values");
+            
+            if (logShaderProperties)
+            {
+                Debug.Log("Shader properties logging enabled (placeholder).");
+            }
+            
             Debug.Log("===========================================");
         }
     }

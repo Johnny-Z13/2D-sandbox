@@ -18,7 +18,7 @@ namespace PixelWorld
         [Header("Zoom")]
         [SerializeField] private float minZoom = 2f;
         [SerializeField] private float maxZoom = 15f;
-        [SerializeField] private float zoomSpeed = 2f;
+        [SerializeField] private float zoomSpeed = 10f;
 
         private Vector3 _currentVelocity;
         private Camera _cam;

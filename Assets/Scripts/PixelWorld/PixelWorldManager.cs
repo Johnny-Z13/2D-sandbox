@@ -15,23 +15,29 @@ namespace PixelWorld
         [Header("World Size Presets")]
         [Tooltip("Quick-load world sizes: 1×6 (narrow/deep), 3×3 (balanced), 6×6 (huge)")]
         [SerializeField] private bool showPresetInfo = true;
+        [SerializeField] private WorldSizePreset worldSizePreset = WorldSizePreset.Balanced3x3;
+        private WorldSizePreset _previousPreset = WorldSizePreset.Balanced3x3;
         
         [Header("Generation Settings")]
+        [SerializeField] private bool randomizeOnStart = false;
         [SerializeField] private int seed = 12345;
+        [SerializeField] private WorldStyle worldStyle = WorldStyle.Organic;
         [SerializeField] private float updateRate = 0.0f; // 0 = every frame
+        [Tooltip("Y-coordinate for the surface level in world units. Keeps spawn point consistent across world sizes.")]
+        [SerializeField] private float surfaceHeightWorldY = 13.8f;
         
         [Header("Cave Generation")]
-        [Tooltip("How hollow the caves are (0.2 = very dense, 0.5 = very hollow)")]
-        [Range(0.2f, 0.6f)]
-        [SerializeField] private float caveThreshold = 0.35f;
+        [Tooltip("Threshold for cave generation. Higher = More Solid/Dense, Lower = More Hollow/Open. (0.5 is balanced)")]
+        [Range(0.3f, 0.7f)]
+        [SerializeField] private float caveThreshold = 0.5f;
         
-        [Tooltip("Horizontal cave frequency (4 = tight, 12 = sprawling)")]
-        [Range(4f, 16f)]
-        [SerializeField] private float caveFrequencyX = 8.0f;
+        [Tooltip("Horizontal cave frequency (Cycles per screen height)")]
+        [Range(2f, 20f)]
+        [SerializeField] private float caveFrequencyX = 4.0f;
         
-        [Tooltip("Vertical cave frequency (8 = flat, 24 = tall chambers)")]
-        [Range(8f, 32f)]
-        [SerializeField] private float caveFrequencyY = 16.0f;
+        [Tooltip("Vertical cave frequency (Cycles per screen height)")]
+        [Range(2f, 20f)]
+        [SerializeField] private float caveFrequencyY = 4.0f;
         
         [Tooltip("Additional cave layer for complexity (0 = off, 1 = full)")]
         [Range(0f, 1f)]
@@ -51,17 +57,17 @@ namespace PixelWorld
         [SerializeField] private float waterNoiseThreshold = 0.55f;
         
         [Header("Material Variety")]
-        [Tooltip("Frequency of sand pockets (10 = scattered, 30 = dense)")]
-        [Range(10f, 40f)]
+        [Tooltip("Frequency of sand pockets (Cycles per screen height)")]
+        [Range(4f, 60f)]
         [SerializeField] private float sandFrequency = 20.0f;
         
         [Tooltip("Rarity of sand in dirt layer (0.5 = common, 0.8 = rare)")]
         [Range(0.4f, 0.9f)]
         [SerializeField] private float sandThresholdShallow = 0.6f;
         
-        [Tooltip("Rarity of sand pockets deep underground (0.6 = common, 0.9 = very rare)")]
-        [Range(0.5f, 0.95f)]
-        [SerializeField] private float sandThresholdDeep = 0.7f;
+        [Tooltip("Rarity of sand pockets deep underground (0.5 = common, 0.9 = very rare)")]
+        [Range(0.3f, 0.95f)]
+        [SerializeField] private float sandThresholdDeep = 0.55f;
 
         [Header("Physics Settings")]
         [Tooltip("Minimum number of solid neighbors required for a pixel to stay solid. If less, it crumbles to sand. (0=Strictly Isolated, 1=Hanging/Tips, 2=Aggressive Cleanup)")]
@@ -93,6 +99,8 @@ namespace PixelWorld
         private static readonly int PropSeed = Shader.PropertyToID("_Seed");
         private static readonly int PropWorldTex = Shader.PropertyToID("_WorldTex");
         private static readonly int PropMouseInput = Shader.PropertyToID("_MouseInput"); // x,y,radius,matID
+        private static readonly int PropSurfaceLevel = Shader.PropertyToID("_SurfaceLevel");
+        private static readonly int PropWorldStyle = Shader.PropertyToID("_WorldStyle");
         
         // Cave Generation Properties
         private static readonly int PropCaveThreshold = Shader.PropertyToID("_CaveThreshold");
@@ -108,6 +116,49 @@ namespace PixelWorld
 
         public static PixelWorldManager Instance { get; private set; }
 
+        private void OnValidate()
+        {
+            if (worldSizePreset != _previousPreset)
+            {
+                // Preset changed via Inspector
+                if (worldSizePreset != WorldSizePreset.Custom)
+                {
+                    switch (worldSizePreset)
+                    {
+                        case WorldSizePreset.Narrow1x6: width = 1024; height = 3072; break;
+                        case WorldSizePreset.Balanced3x3: width = 3072; height = 1536; break;
+                        case WorldSizePreset.Huge6x6: width = 6144; height = 3072; break;
+                    }
+                    
+                    if (Application.isPlaying)
+                    {
+                        InitializeWorld();
+                    }
+                }
+                _previousPreset = worldSizePreset;
+            }
+            else
+            {
+                // Check if manual changes invalidate the preset
+                if (worldSizePreset != WorldSizePreset.Custom)
+                {
+                    bool match = false;
+                    switch (worldSizePreset)
+                    {
+                        case WorldSizePreset.Narrow1x6: match = (width == 1024 && height == 3072); break;
+                        case WorldSizePreset.Balanced3x3: match = (width == 3072 && height == 1536); break;
+                        case WorldSizePreset.Huge6x6: match = (width == 6144 && height == 3072); break;
+                    }
+                    
+                    if (!match)
+                    {
+                        worldSizePreset = WorldSizePreset.Custom;
+                        _previousPreset = WorldSizePreset.Custom;
+                    }
+                }
+            }
+        }
+
         private void Awake()
         {
             Instance = this;
@@ -116,6 +167,12 @@ namespace PixelWorld
         private void Start()
         {
             _mainCam = Camera.main;
+            
+            if (randomizeOnStart)
+            {
+                RandomizeSettings();
+            }
+            
             InitializeWorld();
         }
 
@@ -151,12 +208,19 @@ namespace PixelWorld
             pixelSimShader.SetInt(PropWidth, width);
             pixelSimShader.SetInt(PropHeight, height);
             pixelSimShader.SetInt(PropSeed, seed);
+            pixelSimShader.SetInt(PropWorldStyle, (int)worldStyle);
+
+            // Calculate normalized surface level based on world height
+            // 0.5 is center. We want surfaceHeightWorldY units above center.
+            float worldHeightUnits = height * cellSize;
+            float normalizedSurface = 0.5f + (surfaceHeightWorldY / worldHeightUnits);
+            pixelSimShader.SetFloat(PropSurfaceLevel, normalizedSurface);
             
             // Cave generation parameters (with safety checks)
-            pixelSimShader.SetFloat(PropCaveThreshold, Mathf.Clamp(caveThreshold, 0.2f, 0.6f));
+            pixelSimShader.SetFloat(PropCaveThreshold, Mathf.Clamp(caveThreshold, 0.3f, 0.8f));
             pixelSimShader.SetVector(PropCaveFrequency, new Vector2(
-                Mathf.Clamp(caveFrequencyX, 4f, 16f), 
-                Mathf.Clamp(caveFrequencyY, 8f, 32f)
+                Mathf.Clamp(caveFrequencyX, 1f, 64f), 
+                Mathf.Clamp(caveFrequencyY, 1f, 64f)
             ));
             pixelSimShader.SetFloat(PropCaveLayerBlend, Mathf.Clamp01(caveLayerBlend));
             
@@ -169,9 +233,9 @@ namespace PixelWorld
             
             // Sand generation parameters (with safety checks)
             pixelSimShader.SetVector(PropSandParams, new Vector3(
-                Mathf.Clamp(sandFrequency, 10f, 40f), 
-                Mathf.Clamp(sandThresholdShallow, 0.4f, 0.9f), 
-                Mathf.Clamp(sandThresholdDeep, 0.5f, 0.95f)
+                Mathf.Clamp(sandFrequency, 4f, 60f), 
+                Mathf.Clamp(sandThresholdShallow, 0.2f, 0.9f), 
+                Mathf.Clamp(sandThresholdDeep, 0.2f, 0.95f)
             ));
             
             // Set texture and dispatch
@@ -336,47 +400,37 @@ namespace PixelWorld
         {
             switch (preset)
             {
-                case WorldPreset.DefaultBalanced:
-                    caveThreshold = 0.35f;
-                    caveFrequencyX = 8.0f;
-                    caveFrequencyY = 16.0f;
+                case WorldPreset.Organic:
+                    worldStyle = WorldStyle.Organic;
+                    caveThreshold = 0.52f; // Balanced solid/hollow
+                    caveFrequencyX = 6.0f; // Balanced aspect
+                    caveFrequencyY = 6.0f; // Balanced aspect
                     caveLayerBlend = 0.5f;
-                    waterPoolChance = 0.3f;
-                    waterDepthThreshold = 0.25f;
-                    waterNoiseThreshold = 0.55f;
-                    sandFrequency = 20.0f;
+                    waterPoolChance = 0.3f; // Occasional water
+                    waterDepthThreshold = 0.3f;
+                    waterNoiseThreshold = 0.5f;
+                    sandFrequency = 20.0f; // Visible pockets
+                    sandThresholdShallow = 0.6f;
+                    sandThresholdDeep = 0.55f;
+                    break;
+                    
+                case WorldPreset.Geometric:
+                    worldStyle = WorldStyle.Geometric;
+                    caveThreshold = 0.5f;
+                    caveFrequencyX = 10.0f; // Block frequency
+                    caveFrequencyY = 10.0f; // Block frequency
+                    caveLayerBlend = 0.0f;
+                    waterPoolChance = 0.2f;
+                    waterDepthThreshold = 0.2f;
+                    waterNoiseThreshold = 0.6f;
+                    sandFrequency = 15.0f;
                     sandThresholdShallow = 0.6f;
                     sandThresholdDeep = 0.7f;
                     break;
                     
-                case WorldPreset.CaveExplorer:
-                    caveThreshold = 0.25f; // Very hollow
-                    caveFrequencyX = 10.0f;
-                    caveFrequencyY = 20.0f;
-                    caveLayerBlend = 0.8f; // Complex cave systems
-                    waterPoolChance = 0.5f;
-                    waterDepthThreshold = 0.35f;
-                    waterNoiseThreshold = 0.5f;
-                    sandFrequency = 25.0f;
-                    sandThresholdShallow = 0.5f;
-                    sandThresholdDeep = 0.6f;
-                    break;
-                    
-                case WorldPreset.DenseSolid:
-                    caveThreshold = 0.5f; // Very dense
-                    caveFrequencyX = 6.0f;
-                    caveFrequencyY = 12.0f;
-                    caveLayerBlend = 0.2f;
-                    waterPoolChance = 0.15f;
-                    waterDepthThreshold = 0.15f;
-                    waterNoiseThreshold = 0.65f;
-                    sandFrequency = 15.0f;
-                    sandThresholdShallow = 0.7f;
-                    sandThresholdDeep = 0.8f;
-                    break;
-                    
-                case WorldPreset.UnderwaterCaves:
-                    caveThreshold = 0.32f;
+                case WorldPreset.WaterWorld:
+                    worldStyle = WorldStyle.Organic;
+                    caveThreshold = 0.45f;
                     caveFrequencyX = 9.0f;
                     caveFrequencyY = 18.0f;
                     caveLayerBlend = 0.6f;
@@ -388,17 +442,18 @@ namespace PixelWorld
                     sandThresholdDeep = 0.55f;
                     break;
                     
-                case WorldPreset.DesertCaves:
-                    caveThreshold = 0.38f;
-                    caveFrequencyX = 7.0f;
-                    caveFrequencyY = 14.0f;
-                    caveLayerBlend = 0.4f;
-                    waterPoolChance = 0.1f; // Very little water
-                    waterDepthThreshold = 0.1f;
-                    waterNoiseThreshold = 0.7f;
-                    sandFrequency = 35.0f; // Lots of sand!
-                    sandThresholdShallow = 0.4f;
-                    sandThresholdDeep = 0.5f;
+                case WorldPreset.Rocky:
+                    worldStyle = WorldStyle.Organic;
+                    caveThreshold = 0.7f; // Very dense
+                    caveFrequencyX = 6.0f;
+                    caveFrequencyY = 12.0f;
+                    caveLayerBlend = 0.2f;
+                    waterPoolChance = 0.15f;
+                    waterDepthThreshold = 0.15f;
+                    waterNoiseThreshold = 0.65f;
+                    sandFrequency = 15.0f;
+                    sandThresholdShallow = 0.7f;
+                    sandThresholdDeep = 0.8f;
                     break;
             }
             
@@ -406,20 +461,17 @@ namespace PixelWorld
             Debug.Log($"PixelWorldManager: Loaded preset '{preset}'");
         }
         
-        [ContextMenu("Load Preset: Default Balanced")]
-        private void LoadPresetDefault() => LoadPreset(WorldPreset.DefaultBalanced);
+        [ContextMenu("Load Preset: Organic")]
+        private void LoadPresetOrganic() => LoadPreset(WorldPreset.Organic);
         
-        [ContextMenu("Load Preset: Cave Explorer")]
-        private void LoadPresetCaveExplorer() => LoadPreset(WorldPreset.CaveExplorer);
+        [ContextMenu("Load Preset: Geometric")]
+        private void LoadPresetGeometric() => LoadPreset(WorldPreset.Geometric);
         
-        [ContextMenu("Load Preset: Dense Solid")]
-        private void LoadPresetDenseSolid() => LoadPreset(WorldPreset.DenseSolid);
+        [ContextMenu("Load Preset: Water World")]
+        private void LoadPresetWaterWorld() => LoadPreset(WorldPreset.WaterWorld);
         
-        [ContextMenu("Load Preset: Underwater Caves")]
-        private void LoadPresetUnderwaterCaves() => LoadPreset(WorldPreset.UnderwaterCaves);
-        
-        [ContextMenu("Load Preset: Desert Caves")]
-        private void LoadPresetDesertCaves() => LoadPreset(WorldPreset.DesertCaves);
+        [ContextMenu("Load Preset: Rocky")]
+        private void LoadPresetRocky() => LoadPreset(WorldPreset.Rocky);
         
         // === World Size Presets ===
         
@@ -428,6 +480,9 @@ namespace PixelWorld
         /// </summary>
         public void LoadWorldSizePreset(WorldSizePreset preset)
         {
+            worldSizePreset = preset;
+            _previousPreset = preset;
+
             switch (preset)
             {
                 case WorldSizePreset.Narrow1x6:
@@ -446,6 +501,9 @@ namespace PixelWorld
                     width = 6144;
                     height = 3072;
                     Debug.Log("World Size: 6×6 (Huge) - 6144×3072 pixels");
+                    break;
+                case WorldSizePreset.Custom:
+                    Debug.Log($"World Size: Custom - {width}×{height} pixels");
                     break;
             }
             
@@ -470,6 +528,132 @@ namespace PixelWorld
         [ContextMenu("⚡ World Size: 6×6 (Huge)")]
         private void LoadWorldSize6x6() => LoadWorldSizePreset(WorldSizePreset.Huge6x6);
 
+        [ContextMenu("🎲 Randomize Settings")]
+        public void RandomizeSettings()
+        {
+            seed = UnityEngine.Random.Range(0, 100000);
+            worldStyle = (WorldStyle)UnityEngine.Random.Range(0, 2); // Randomize Style
+            
+            if (worldStyle == WorldStyle.Organic)
+            {
+                // Cave - Organic ranges
+                caveThreshold = UnityEngine.Random.Range(0.45f, 0.55f); 
+                caveFrequencyX = UnityEngine.Random.Range(3f, 8f); 
+                caveFrequencyY = UnityEngine.Random.Range(3f, 8f); 
+                caveLayerBlend = UnityEngine.Random.Range(0.3f, 0.7f);
+                
+                // Sand
+                sandFrequency = UnityEngine.Random.Range(10f, 30f);
+            }
+            else // Geometric
+            {
+                // Cave - Geometric ranges (slightly higher freq for blocks)
+                caveThreshold = UnityEngine.Random.Range(0.45f, 0.55f);
+                caveFrequencyX = UnityEngine.Random.Range(5f, 15f); 
+                caveFrequencyY = UnityEngine.Random.Range(5f, 15f);
+                caveLayerBlend = 0f; 
+                
+                // Sand
+                sandFrequency = UnityEngine.Random.Range(10f, 25f);
+            }
+            
+            // Water (Common)
+            waterPoolChance = UnityEngine.Random.Range(0.2f, 0.6f);
+            waterDepthThreshold = UnityEngine.Random.Range(0.2f, 0.5f);
+            waterNoiseThreshold = UnityEngine.Random.Range(0.45f, 0.65f);
+            
+            // Sand Thresholds (Common)
+            sandThresholdShallow = UnityEngine.Random.Range(0.45f, 0.75f);
+            sandThresholdDeep = UnityEngine.Random.Range(0.45f, 0.75f);
+            
+            Debug.Log($"PixelWorldManager: Settings Randomized! Seed: {seed}, Style: {worldStyle}");
+            
+            if (Application.isPlaying)
+            {
+                InitializeWorld();
+            }
+        }
+
+        [ContextMenu("💾 Save Settings")]
+        public void SaveSettings()
+        {
+            WorldSettingsData data = new WorldSettingsData
+            {
+                seed = seed,
+                worldStyle = (int)worldStyle,
+                caveThreshold = caveThreshold,
+                caveFrequencyX = caveFrequencyX,
+                caveFrequencyY = caveFrequencyY,
+                caveLayerBlend = caveLayerBlend,
+                waterPoolChance = waterPoolChance,
+                waterDepthThreshold = waterDepthThreshold,
+                waterNoiseThreshold = waterNoiseThreshold,
+                sandFrequency = sandFrequency,
+                sandThresholdShallow = sandThresholdShallow,
+                sandThresholdDeep = sandThresholdDeep,
+                stabilityThreshold = stabilityThreshold
+            };
+            
+            string json = JsonUtility.ToJson(data, true);
+            string path = System.IO.Path.Combine(Application.persistentDataPath, "saved_world_settings.json");
+            System.IO.File.WriteAllText(path, json);
+            
+            Debug.Log($"PixelWorldManager: Settings saved to {path}");
+            
+            // Also save to Assets folder for easy access in Editor
+            #if UNITY_EDITOR
+            string assetPath = System.IO.Path.Combine(Application.dataPath, "saved_world_settings.json");
+            System.IO.File.WriteAllText(assetPath, json);
+            Debug.Log($"PixelWorldManager: Settings also saved to {assetPath}");
+            #endif
+        }
+
+        [ContextMenu("📂 Load Settings")]
+        public void LoadSettings()
+        {
+            string path = System.IO.Path.Combine(Application.persistentDataPath, "saved_world_settings.json");
+            
+            #if UNITY_EDITOR
+            // Prefer the one in Assets if in Editor
+            string assetPath = System.IO.Path.Combine(Application.dataPath, "saved_world_settings.json");
+            if (System.IO.File.Exists(assetPath))
+            {
+                path = assetPath;
+            }
+            #endif
+            
+            if (System.IO.File.Exists(path))
+            {
+                string json = System.IO.File.ReadAllText(path);
+                WorldSettingsData data = JsonUtility.FromJson<WorldSettingsData>(json);
+                
+                seed = data.seed;
+                worldStyle = (WorldStyle)data.worldStyle;
+                caveThreshold = data.caveThreshold;
+                caveFrequencyX = data.caveFrequencyX;
+                caveFrequencyY = data.caveFrequencyY;
+                caveLayerBlend = data.caveLayerBlend;
+                waterPoolChance = data.waterPoolChance;
+                waterDepthThreshold = data.waterDepthThreshold;
+                waterNoiseThreshold = data.waterNoiseThreshold;
+                sandFrequency = data.sandFrequency;
+                sandThresholdShallow = data.sandThresholdShallow;
+                sandThresholdDeep = data.sandThresholdDeep;
+                stabilityThreshold = data.stabilityThreshold;
+                
+                Debug.Log($"PixelWorldManager: Settings loaded from {path}");
+                
+                if (Application.isPlaying)
+                {
+                    InitializeWorld();
+                }
+            }
+            else
+            {
+                Debug.LogWarning($"PixelWorldManager: No settings file found at {path}");
+            }
+        }
+
         private void OnDestroy()
         {
             ReleaseTexture(ref _worldA);
@@ -491,11 +675,16 @@ namespace PixelWorld
     /// </summary>
     public enum WorldPreset
     {
-        DefaultBalanced,
-        CaveExplorer,
-        DenseSolid,
-        UnderwaterCaves,
-        DesertCaves
+        Organic,
+        Geometric,
+        WaterWorld,
+        Rocky
+    }
+    
+    public enum WorldStyle
+    {
+        Organic = 0,
+        Geometric = 1
     }
     
     /// <summary>
@@ -504,6 +693,7 @@ namespace PixelWorld
     /// </summary>
     public enum WorldSizePreset
     {
+        Custom,       // Manual dimensions
         Narrow1x6,    // 1024×3072 - Narrow vertical shaft, deep exploration
         Balanced3x3,  // 3072×1536 - Balanced exploration & digging
         Huge6x6       // 6144×3072 - Massive open world

@@ -6,6 +6,15 @@ uint _Width;
 uint _Height;
 float _Time;
 uint _Seed;
+float _SurfaceLevel;
+int _WorldStyle; // 0 = Organic, 1 = Geometric
+
+// Generation Settings
+float _CaveThreshold;
+float2 _CaveFrequency;
+float _CaveLayerBlend;
+float3 _WaterParams; // x=chance, y=depth, z=noise
+float3 _SandParams; // x=freq, y=shallow, z=deep
 
 // Mouse Input: x, y, radius, materialID
 float4 _MouseInput;
@@ -21,29 +30,59 @@ RWTexture2D<int> WorldOut;
 #define MAT_SAND 3
 #define MAT_WATER 4
 
-// Constants
-#define WATER_SCAN_RADIUS 5
+// --- Robust Noise Functions ---
 
-// -- Noise Helpers --
-float hash(float2 p) {
-    p = 50.0 * frac(p * 0.3183099 + float2(0.71, 0.113));
-    return -1.0 + 2.0 * frac(p.x * p.y * (p.x + p.y));
+// Hash without Sine (to avoid large coordinate precision issues)
+// Based on "Hash without Sine" by Dave_Hoskins
+float2 hash22(float2 p)
+{
+	float3 p3 = frac(float3(p.xyx) * float3(.1031, .1030, .0973));
+    p3 += dot(p3, p3.yzx+33.33);
+    return frac((p3.xx+p3.yz)*p3.zy);
 }
 
-float noise(float2 p) {
+// Gradient Noise
+// Returns roughly [-1, 1]
+float noise(float2 p)
+{
     float2 i = floor(p);
     float2 f = frac(p);
     float2 u = f * f * (3.0 - 2.0 * f);
-    return lerp(lerp(hash(i + float2(0.0, 0.0)), hash(i + float2(1.0, 0.0)), u.x),
-                lerp(hash(i + float2(0.0, 1.0)), hash(i + float2(1.0, 1.0)), u.x), u.y);
+
+    float2 ga = hash22(i + float2(0.0, 0.0));
+    float2 gb = hash22(i + float2(1.0, 0.0));
+    float2 gc = hash22(i + float2(0.0, 1.0));
+    float2 gd = hash22(i + float2(1.0, 1.0));
+    
+    // Map hashes from [0,1] to [-1,1] direction vectors
+    ga = ga * 2.0 - 1.0;
+    gb = gb * 2.0 - 1.0;
+    gc = gc * 2.0 - 1.0;
+    gd = gd * 2.0 - 1.0;
+
+    float va = dot(ga, f - float2(0.0, 0.0));
+    float vb = dot(gb, f - float2(1.0, 0.0));
+    float vc = dot(gc, f - float2(0.0, 1.0));
+    float vd = dot(gd, f - float2(1.0, 1.0));
+
+    return lerp(lerp(va, vb, u.x), lerp(vc, vd, u.x), u.y);
 }
 
+// FBM returning [0, 1]
 float fbm(float2 p) {
     float f = 0.0;
-    f += 0.5000 * noise(p); p *= 2.02;
-    f += 0.2500 * noise(p); p *= 2.03;
-    f += 0.1250 * noise(p); p *= 2.01;
-    return f;
+    float amp = 0.5;
+    float freq = 1.0;
+    
+    // 3 Octaves
+    for(int i = 0; i < 3; i++) {
+        f += amp * noise(p * freq);
+        freq *= 2.0;
+        amp *= 0.5;
+    }
+    
+    // Normalize from approx [-1, 1] to [0, 1]
+    return f * 0.5 + 0.5;
 }
 
 [numthreads(8,8,1)]
@@ -51,52 +90,162 @@ void CSInit (uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= _Width || id.y >= _Height) return;
 
-    float2 uv = float2(id.x, id.y) / float2(_Width, _Height);
-    float2 offset = float2(_Seed * 12.34, _Seed * 56.78);
-    
-    // 1. Cave Noise
-    float caveNoise = fbm((uv + offset) * float2(8.0, 16.0));
-    
-    // 2. Surface Terrain
-    float surfaceHeight = 0.95 + 0.02 * noise((uv.x + offset.x) * 15.0 * float2(1, 0));
-    
-    // 3. Mineral Noise
-    float mineralNoise = noise((uv + offset + float2(5.2, 1.3)) * 20.0);
+    // 1. Coordinate System
+    // Use aspect-corrected coordinates to ensure shapes are round, not stretched.
+    // pos.y is 0..1
+    // pos.x is 0..Aspect
+    float2 pos = float2(id.x, id.y) / (float)_Height;
+    float2 uv = float2(id.x, id.y) / float2(_Width, _Height); // 0..1 for height checks
 
-    int mat = MAT_EMPTY;
+    // 2. Seed Offset
+    // Use a small, safe offset based on seed to avoid float precision issues
+    // Modulo 1000 keeps it well within safe range for noise functions
+    float seedX = (float)(_Seed % 1000);
+    float seedY = (float)((_Seed / 1000) % 1000);
+    float2 offset = float2(seedX, seedY) * 10.0; 
+
+    // 3. Domain Warping
+    // Create organic distortion
+    float2 warp = float2(
+        fbm((pos + offset) * 1.5),
+        fbm((pos + offset + float2(5.2, 1.3)) * 1.5)
+    );
     
+    // 4. Cave Noise
+    float caveVal = 0.0;
+    
+    if (_WorldStyle == 1) // Geometric
+    {
+        // Geometric Style: Blocky, straight lines, shafts
+        // Quantize coordinates for blocky look
+        float2 blockPos = floor((pos + offset) * _CaveFrequency);
+        
+        // Sample at center of block (0.5) to avoid Gradient Noise returning 0 at integers
+        float2 samplePos = blockPos + 0.5;
+        
+        // Base block noise - Normalize to [0, 1]
+        float blockNoise = noise(samplePos) * 0.5 + 0.5;
+        
+        // Vertical Shafts: Noise that varies mostly on X - Normalize to [0, 1]
+        float shaftNoise = noise(float2(samplePos.x, 0)) * 0.5 + 0.5;
+        
+        // Horizontal Tunnels: Noise that varies mostly on Y - Normalize to [0, 1]
+        float tunnelNoise = noise(float2(0, samplePos.y)) * 0.5 + 0.5;
+        
+        // Combine: Blocks + Shafts + Tunnels
+        // If shaftNoise > 0.8, it's a vertical shaft (Top 20%)
+        // If tunnelNoise > 0.8, it's a horizontal tunnel (Top 20%)
+        // If blockNoise > threshold, it's a room
+        
+        caveVal = blockNoise;
+        if (shaftNoise > 0.8) caveVal = 1.0; // Force open
+        if (tunnelNoise > 0.8) caveVal = 1.0; // Force open
+    }
+    else // Organic
+    {
+        // Apply warp and frequency
+        // _CaveFrequency is cycles per screen height
+        caveVal = fbm((pos + offset + warp * 0.2) * _CaveFrequency);
+        
+        // Increase contrast to create distinct open/solid areas
+        // (val - 0.5) * contrast + 0.5
+        caveVal = (caveVal - 0.5) * 1.5 + 0.5;
+    }
+
+    // 5. Surface Terrain
+    // Simple 1D noise for surface
+    float surfaceNoise = noise((float2(pos.x, 0) + offset) * 4.0);
+    float surfaceHeight = _SurfaceLevel + (surfaceNoise * 0.05);
+    
+    if (_WorldStyle == 1)
+    {
+        // Stepped surface for geometric look
+        surfaceHeight = floor(surfaceHeight * 20.0) / 20.0;
+    }
+
+    // 6. Mineral Noise
+    float mineralVal = 0.0;
+    if (_WorldStyle == 1)
+    {
+        // Blocky minerals - Normalize to [0, 1]
+        // Sample at center (0.5) to avoid 0-value at integers
+        mineralVal = noise(floor((pos + offset) * _SandParams.x) + 0.5) * 0.5 + 0.5;
+    }
+    else
+    {
+        mineralVal = fbm((pos + offset + warp * 0.1) * _SandParams.x);
+    }
+    
+    // --- Material Logic ---
+    
+    int mat = MAT_EMPTY;
+
     if (uv.y > surfaceHeight)
     {
         mat = MAT_EMPTY;
     }
     else
     {
-        float caveThreshold = 0.35;
-        if (uv.y < 0.5) caveThreshold = 0.32;
+        // Depth Bias: Make deeper areas slightly more solid
+        // At y=0 (bottom), threshold increases by 0.1
+        float threshold = _CaveThreshold + (1.0 - uv.y) * 0.1;
         
-        if (caveNoise > caveThreshold)
+        if (caveVal > threshold)
         {
-            if (uv.y < 0.3 && caveNoise > 0.6) mat = MAT_WATER;
-            else mat = MAT_EMPTY;
+            // Cave (Empty)
+            // Check for Water
+            // _WaterParams: x=chance, y=depth_limit, z=noise_threshold
+            if (uv.y < _WaterParams.y)
+            {
+                // Use a separate noise for water placement to avoid filling every cave
+                // Lower frequency for larger pools
+                float waterNoise = fbm((pos + offset) * 5.0);
+                
+                // Bias water to bottom of caves? 
+                // In initialization, we can't easily check "bottom of cave" without neighbor checks.
+                // Instead, we rely on the simulation to settle the water.
+                // We just spawn it in chunks.
+                
+                if (waterNoise > _WaterParams.z)
+                {
+                     mat = MAT_WATER;
+                }
+                else
+                {
+                    mat = MAT_EMPTY;
+                }
+            }
+            else
+            {
+                mat = MAT_EMPTY;
+            }
         }
         else
         {
+            // Solid Ground
+            // Determine Rock vs Dirt based on depth
             float depth = surfaceHeight - uv.y;
             
-            if (depth < 0.05) 
+            if (depth < 0.15) // Top layer
             {
-                mat = MAT_DIRT; 
-                if (mineralNoise > 0.6) mat = MAT_SAND;
+                mat = MAT_DIRT;
+                // Sand pockets in dirt
+                if (mineralVal > _SandParams.y) mat = MAT_SAND;
             }
-            else 
+            else // Deep layer
             {
                 mat = MAT_ROCK;
-                if (mineralNoise > 0.7) mat = MAT_SAND;
+                // Sand pockets in rock
+                if (mineralVal > _SandParams.z) mat = MAT_SAND;
             }
         }
     }
+
+    // Bedrock Safety
+    if (uv.y < 0.02) mat = MAT_ROCK;
     
-    if (id.x < 5 || id.x > _Width - 5 || id.y < 5) mat = MAT_ROCK;
+    // Side Walls
+    if (id.x < 2 || id.x > _Width - 3) mat = MAT_ROCK;
 
     WorldOut[id.xy] = mat;
 }
@@ -120,7 +269,8 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         {
             if (_MouseInput.w == 0)
             {
-                float noiseVal = noise(float2(id.x + _Time * 100.0, id.y) * 0.1);
+                // Eraser with noise edge
+                float noiseVal = noise(float2(id.x, id.y) * 0.1 + _Time);
                 if (distSq < radSq * (0.8 + 0.2 * noiseVal))
                 {
                     WorldOut[id.xy] = MAT_EMPTY;
@@ -184,10 +334,6 @@ void CSMain (uint3 id : SV_DispatchThreadID)
             // 4. Horizontal Flow
             if (!slid)
             {
-                // Use Parity to decide flow direction to prevent cloning/deletion conflicts
-                // If Parity says LEFT, we try to move LEFT.
-                // Receiver (Empty) at Left must also check Parity to know "Right is coming".
-                
                 if (parity)
                 {
                     if (left == MAT_EMPTY) result = MAT_EMPTY;
@@ -211,17 +357,19 @@ void CSMain (uint3 id : SV_DispatchThreadID)
              bool sandL = (upLeft == MAT_SAND) && (left != MAT_EMPTY && left != MAT_WATER);
              bool sandR = (upRight == MAT_SAND) && (right != MAT_EMPTY && right != MAT_WATER);
 
-             if (sandL && sandR) result = MAT_SAND;
-             else if (sandL) result = MAT_SAND;
-             else if (sandR) result = MAT_SAND;
+             if (parity)
+             {
+                 if (sandR) result = MAT_SAND;
+                 else if (sandL) result = MAT_SAND;
+             }
+             else
+             {
+                 if (sandL) result = MAT_SAND;
+                 else if (sandR) result = MAT_SAND;
+             }
              
              if (result == self)
              {
-                 // Horizontal Water Flow Reception
-                 // We must match the sender's logic exactly.
-                 // Sender (Water) moves LEFT if parity is TRUE.
-                 // So I (Empty) accept from RIGHT if parity is TRUE.
-                 
                  if (parity)
                  {
                      if (right == MAT_WATER) result = MAT_WATER;
@@ -231,22 +379,13 @@ void CSMain (uint3 id : SV_DispatchThreadID)
                      if (left == MAT_WATER) result = MAT_WATER;
                  }
                  
-                 // Diagonal Water Slide Reception
-                 // Water at UpLeft slides to DownRight (Me)
-                 // Need to check if it actually wants to slide.
                  if (result == self)
                  {
                      int upL = (id.y < _Height - 1 && id.x > 0) ? WorldIn[uint2(id.x - 1, id.y + 1)] : MAT_EMPTY;
                      int upR = (id.y < _Height - 1 && id.x < _Width - 1) ? WorldIn[uint2(id.x + 1, id.y + 1)] : MAT_EMPTY;
-
-                     // Simplified: If there is water above-diagonal, and it's blocked below, it comes here.
-                     // This is "good enough" for V0 without complex parity checks,
-                     // because sliding is destructive (downward) and less prone to infinite loops than horizontal.
-                     
                      int leftVal = (id.x > 0) ? WorldIn[uint2(id.x-1, id.y)] : MAT_ROCK;
                      int rightVal = (id.x < _Width-1) ? WorldIn[uint2(id.x+1, id.y)] : MAT_ROCK;
                      
-                     // Water at UpLeft checks Down (Left). If Blocked, it slides to DownRight (Me).
                      if (upL == MAT_WATER && leftVal != MAT_EMPTY) result = MAT_WATER;
                      else if (upR == MAT_WATER && rightVal != MAT_EMPTY) result = MAT_WATER;
                  }

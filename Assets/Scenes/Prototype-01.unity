@@ -576,7 +576,7 @@ MonoBehaviour:
   maxBounds: {x: 40, y: 20}
   minZoom: 2
   maxZoom: 15
-  zoomSpeed: 2
+  zoomSpeed: 10
 --- !u!1 &619394800
 GameObject:
   m_ObjectHideFlags: 0
@@ -1611,23 +1611,27 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d3fba357f9b832f47a9ccbee2db8fdc6, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PixelWorld.PixelWorldManager
-  width: 3072
-  height: 1536
+  width: 1024
+  height: 3072
   cellSize: 0.02
   showPresetInfo: 1
-  seed: 222
+  worldSizePreset: 1
+  randomizeOnStart: 1
+  seed: 89178
+  worldStyle: 0
   updateRate: 0
-  caveThreshold: 0.304
-  caveFrequencyX: 9.48
-  caveFrequencyY: 19.4
-  caveLayerBlend: 0.21
-  waterPoolChance: 0.926
-  waterDepthThreshold: 0.594
-  waterNoiseThreshold: 0.401
-  sandFrequency: 20
-  sandThresholdShallow: 0.638
-  sandThresholdDeep: 0.7
-  stabilityThreshold: 2
+  surfaceHeightWorldY: 13.8
+  caveThreshold: 0.4650842
+  caveFrequencyX: 5.912812
+  caveFrequencyY: 3.0339227
+  caveLayerBlend: 0.35834318
+  waterPoolChance: 0.5977711
+  waterDepthThreshold: 0.2742074
+  waterNoiseThreshold: 0.54063445
+  sandFrequency: 26.27779
+  sandThresholdShallow: 0.5250508
+  sandThresholdDeep: 0.5591569
+  stabilityThreshold: 0
   pixelSimShader: {fileID: 7200000, guid: 06e6827a492fc0a48a183a0771bb31b9, type: 3}
   worldRenderer: {fileID: 1350249361}
 --- !u!114 &1852418289
@@ -1645,9 +1649,9 @@ MonoBehaviour:
   worldRenderer: {fileID: 1350249361}
   postProcessVolume: {fileID: 0}
   currentPreset: 0
-  showPresetNotification: 1
+  showPresetNotification: 0
   notificationDuration: 3
-  useManualSettings: 0
+  useManualSettings: 1
   manualSandSettings:
     glitterIntensity: 2
     glitterScale: 20

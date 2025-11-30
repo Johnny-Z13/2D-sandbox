@@ -19,7 +19,7 @@ namespace PixelWorld
             Debug.Log("🔧 Starting Graphics Presets setup...");
             
             // Find PixelWorldManager
-            var worldManager = Object.FindObjectOfType<PixelWorldManager>();
+            var worldManager = Object.FindFirstObjectByType<PixelWorldManager>();
             if (worldManager == null)
             {
                 Debug.LogError("❌ PixelWorldManager not found in scene! Please add it first.");
@@ -44,7 +44,7 @@ namespace PixelWorld
             }
             
             // Find World Renderer
-            var renderers = Object.FindObjectsOfType<Renderer>();
+            var renderers = Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None);
             Renderer worldRenderer = null;
             
             Debug.Log($"Searching through {renderers.Length} renderers...");
@@ -153,7 +153,7 @@ namespace PixelWorld
         {
             Debug.Log("🔍 Verifying Graphics Presets setup...");
             
-            var controller = Object.FindObjectOfType<RenderingPresetController>();
+            var controller = Object.FindFirstObjectByType<RenderingPresetController>();
             if (controller == null)
             {
                 Debug.LogError("❌ RenderingPresetController not found in scene!");

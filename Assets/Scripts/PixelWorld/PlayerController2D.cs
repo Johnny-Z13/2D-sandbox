@@ -126,7 +126,7 @@ namespace PixelWorld
                 _animator.SetBool("IsGrounded", _isGrounded);
                 _animator.SetFloat("VerticalVelocity", _velocity.y);
                 _animator.SetBool("IsCrouching", _isCrouching);
-                _animator.SetBool("IsDigging", _isDigging);
+                // _animator.SetBool("IsDigging", _isDigging); // Parameter missing in Animator
                 _animator.SetInteger("WeaponType", _weaponType);
             }
 
@@ -200,6 +200,7 @@ namespace PixelWorld
                         Vector3 spawnPos = transform.position + spawnOffset;
 
                         Instantiate(bombPrefab, spawnPos, Quaternion.identity);
+                        AudioEventTriggers.OnBombPlaced();
                         Debug.Log($"Bomb spawned at {spawnPos} (Offset: {spawnOffset})");
                     }
                     else
@@ -251,6 +252,7 @@ namespace PixelWorld
             {
                 // Spawn sand cloud effect
                 StartCoroutine(SpawnSandCloud(digPos));
+                AudioEventTriggers.OnPaintSand();
             }
             else
             {
@@ -258,6 +260,15 @@ namespace PixelWorld
                 // Reduced water radius by 50% (from 19 to 9.5)
                 float radius = (matID == 4) ? 9.5f : 19f;
                 PixelWorldManager.Instance.ModifyWorld(digPos, radius, matID);
+
+                if (matID == 4) // Water
+                {
+                    AudioEventTriggers.OnPaintWater();
+                }
+                else if (matID == 0) // Dig
+                {
+                    AudioEventTriggers.OnDig();
+                }
             }
         }
 
