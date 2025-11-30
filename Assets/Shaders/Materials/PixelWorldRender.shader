@@ -65,13 +65,6 @@ Shader "Unlit/PixelWorldRender"
                 return frac(p.x * p.y);
             }
             
-            float hash31(float3 p)
-            {
-                p = frac(p * float3(0.1031, 0.1030, 0.0973));
-                p += dot(p, p.yzx + 33.33);
-                return frac((p.x + p.y) * p.z);
-            }
-            
             float noise2D(float2 p)
             {
                 float2 i = floor(p);
@@ -147,28 +140,50 @@ Shader "Unlit/PixelWorldRender"
                 return finalColor;
             }
 
-            // === WATER EFFECTS ===
-            float3 ApplyWaterEffects(float3 baseColor, float2 pixelPos, float time, uint2 texCoords)
+            // === SCI-FI FLUID EFFECTS ===
+            float3 ApplySciFiFluid(float3 baseColor, float2 pixelPos, float time, uint2 texCoords)
             {
-                // Caustics-like shimmer
-                float shimmer1 = noise2D(pixelPos * 0.1 + time * 0.5);
-                float shimmer2 = noise2D(pixelPos * 0.15 - time * 0.3 + float2(100, 50));
-                float caustics = (shimmer1 + shimmer2) * 0.5;
-                caustics = pow(caustics, 2.0);
+                // 1. Plasma Field (Low Frequency to avoid aliasing/checkerboard)
+                // Slower, undulating movement creating "energy blobs"
+                float2 p = pixelPos * 0.03; // Scale down significantly for large, smooth shapes
                 
-                // Depth-based variation
-                float depth = 1.0 - (texCoords.y / _WorldTex_TexelSize.w);
-                float3 deepWaterTint = lerp(
-                    float3(0.2, 0.5, 1.0),
-                    float3(0.05, 0.2, 0.5),
-                    depth * 0.5
-                );
+                float plasma = sin(p.x + time * 0.5);
+                plasma += sin(p.y + time * 0.3);
+                plasma += sin((p.x + p.y) * 0.5 + time * 0.7);
                 
-                // Highlights
-                float highlight = caustics * _WaterShimmer;
-                float3 highlightColor = float3(0.6, 0.8, 1.2);
+                // Normalize plasma (-3 to 3) -> (0 to 1)
+                plasma = plasma * 0.166 + 0.5;
                 
-                return baseColor * deepWaterTint + highlightColor * highlight;
+                // 2. "Data Stream" / Vertical Flow
+                // Subtle vertical lines moving up, giving a "rising energy" feel
+                // Quantize X to create distinct "columns"
+                float columnX = floor(pixelPos.x * 0.2) * 5.0; 
+                float verticalFlow = sin(columnX) * sin(pixelPos.y * 0.05 - time * 1.5);
+                verticalFlow = smoothstep(0.2, 0.8, verticalFlow); // Sharpen
+                
+                // 3. Color Palette (Electric Sci-Fi)
+                float3 deepColor = float3(0.02, 0.05, 0.2);  // Dark Indigo/Void
+                float3 midColor = float3(0.0, 0.3, 0.8);     // Electric Blue
+                float3 brightColor = float3(0.0, 0.8, 1.0);  // Cyan Neon
+                
+                // Mix colors based on plasma intensity
+                // Use smoothstep for a more "cel-shaded" or distinct band look
+                float3 fluidColor = lerp(deepColor, midColor, smoothstep(0.2, 0.6, plasma));
+                fluidColor = lerp(fluidColor, brightColor, smoothstep(0.6, 0.9, plasma));
+                
+                // Add the vertical flow as a brightness/energy boost
+                fluidColor += brightColor * verticalFlow * 0.3 * _WaterShimmer;
+                
+                // 4. Surface/Depth Gradient
+                // Make the top of the liquid brighter/lighter
+                float depth = 1.0 - (texCoords.y / _WorldTex_TexelSize.w); // 0 at top, 1 at bottom
+                fluidColor += float3(0.2, 0.4, 0.5) * (1.0 - depth) * 0.5;
+
+                // 5. Pulse
+                float pulse = sin(time) * 0.05 + 0.95;
+                fluidColor *= pulse;
+
+                return fluidColor;
             }
 
             // === ROCK DETAILS ===
@@ -220,11 +235,11 @@ Shader "Unlit/PixelWorldRender"
                         float3 sandBase = float3(0.95, 0.85, 0.45);
                         col.rgb = ApplySandGlitter(sandBase, i.worldPos, _Time.y);
                     }
-                    else if (matID == 4) // WATER
+                    else if (matID == 4) // WATER (SCI-FI FLUID)
                     {
-                        float3 waterBase = float3(0.15, 0.35, 0.85);
-                        col.rgb = ApplyWaterEffects(waterBase, i.worldPos, _Time.y, texCoords);
-                        col.a = 0.8; // Slightly transparent water
+                        float3 waterBase = float3(0.0, 0.0, 0.0); // Base ignored, fully procedural
+                        col.rgb = ApplySciFiFluid(waterBase, i.worldPos, _Time.y, texCoords);
+                        col.a = 0.9; // More opaque for the "goo/plasma" feel
                     }
                 }
 
@@ -234,4 +249,3 @@ Shader "Unlit/PixelWorldRender"
         }
     }
 }
-
